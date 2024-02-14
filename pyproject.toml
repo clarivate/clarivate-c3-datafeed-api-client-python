@@ -1,0 +1,27 @@
+[tool.poetry]
+name = "clarivate.datafeedapi"
+version = "1.0.0"
+description = ""
+authors = ["Clarivate"]
+readme = "README.md"
+packages = [{include = "clarivate/datafeedapi", from = "src/"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+httpx = "^0.25.0"
+platformdirs = "^3.11.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.setuptools.packages.find]
+where = ["src/"]
+include = ["clarivate.datafeedapi"]
+
+[project]
+name = "clarivate-c3-datafeedapi"
+
+[tool.poetry.scripts]
+datafeed-api-client = "clarivate.datafeedapi:main"
+

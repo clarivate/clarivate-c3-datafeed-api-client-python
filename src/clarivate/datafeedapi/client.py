@@ -140,7 +140,13 @@ class Client:
     @_retry
     def _run_call_sync(self, pg: str, url: str, payload: str, content_type: str = "text"):
         return self._process_response(
-            httpx.request(pg, url, headers=self._setup_headers(content_type), data=payload),
+            httpx.request(
+                pg,
+                url,
+                headers=self._setup_headers(content_type),
+                data=payload,
+                follow_redirects=True,
+            ),
             content_type,
         )
 
@@ -148,7 +154,11 @@ class Client:
     async def _run_call_async(self, pg: str, url: str, payload: str, content_type: str = "text"):
         return self._process_response(
             await httpx_async.request(
-                pg, url, headers=self._setup_headers(content_type), data=payload
+                pg,
+                url,
+                headers=self._setup_headers(content_type),
+                data=payload,
+                follow_redirects=True,
             ),
             content_type,
         )

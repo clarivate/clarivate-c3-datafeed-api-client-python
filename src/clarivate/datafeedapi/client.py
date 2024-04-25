@@ -20,6 +20,7 @@ from platformdirs import user_config_dir
 # Autovivify our application's private directory
 MODULE_DIR = Path(__file__).parent
 PRIVATE_DIR = Path(user_config_dir("datafeedapi", "clarivate"))
+
 if not PRIVATE_DIR.exists():
     os.makedirs(PRIVATE_DIR)
 else:
@@ -29,9 +30,23 @@ else:
 if not (PRIVATE_DIR / "config.py").exists():
     shutil.copy(MODULE_DIR / "config.py", PRIVATE_DIR)
 
+
 # Import our config
 sys.path.insert(0, str(PRIVATE_DIR.absolute()))
 import config
+
+# When a new variable is added or existing changed to the config file, It should be available to client.py
+# Start
+from clarivate.datafeedapi import config as app_config
+
+app_config_vars = {key: value for key, value in app_config.__dict__.items() if key.isupper()}
+my_config_vars = {key: value for key, value in config.__dict__.items() if key.isupper()}
+
+for key, value in app_config_vars.items():
+    if key not in my_config_vars or config.__dict__[key] != value:
+        config.__dict__[key] = value
+
+# End
 
 sys.path = sys.path[1:]
 
@@ -120,10 +135,12 @@ class Client:
         if not self.api_key:
             raise MissingAuth
 
-    def _setup_headers(self, content_type: str):
+    def _setup_headers(self, content_type: str, current_chunk_length: int = 0):
         headers = {"X-ApiKey": self.api_key}
         if content_type == "text":
             headers["Content-Type"] = "application/json"
+        if current_chunk_length > 0:
+            headers.update({"Range": f"bytes={current_chunk_length}-"})
         return headers
 
     def _process_response(self, r: httpx.Response, content_type: str):
@@ -236,7 +253,6 @@ class Client:
         response = self._run_call_sync(
             "GET", f"{self.server_url}checkPackageStatus?token={token}", {}, "text"
         )
-        print(f"type(response)={type(response)} response={response}", flush=True)
         data = json.loads(response)
         if "status" in data:
             status = data["status"]
@@ -277,18 +293,10 @@ class Client:
         return status, files
 
     def download_package_file_sync(self, file_name: str, token: str):
-        """Download a content set package file (sync version)"""
-        response = self._run_call_sync(
-            "GET", f"{self.server_url}downloadPackage?token={token}", {}, "binary"
-        )
-        open(file_name, "wb").write(response)
+        self.download_package_file_stream_sync(token, file_name)
 
     async def download_package_file_async(self, file_name: str, token: str):
-        """Download a content set package file (async version)"""
-        response = await self._run_call_async(
-            "GET", f"{self.server_url}downloadPackage?token={token}", {}, "binary"
-        )
-        open(file_name, "wb").write(response)
+        await self.download_package_file_stream_async(token, file_name)
 
     def download_package_files_sync(self, destination_directory: str, files: list):
         """Download all content set package files (sync version)"""
@@ -475,6 +483,63 @@ class Client:
 
         return asyncio.run(fetch_async())
 
+    @_retry_async
+    async def download_package_file_stream_async(self, token: str, file_name: str) -> None:
+        """Download the file via stream, and resumed if it is not completed due to some issue.
+
+        (async version)"""
+
+        url, headers = self.prepare_request_stream(token, file_name)
+        async with httpx_async.stream(
+            "GET", url, headers=headers, follow_redirects=True
+        ) as response:
+            continue_download = self.handle_response_stream(file_name, response)
+            if not continue_download:
+                return
+            with open(file_name, "ab") as file:
+                async for chunk in response.aiter_bytes(config.CHUNK_SIZE):
+                    file.write(chunk)
+
+    @_retry
+    def download_package_file_stream_sync(self, token: str, file_name: str) -> None:
+        """Download the file via stream, and resumed if it is not completed due to some issue.
+
+        (sync version)"""
+        url, headers = self.prepare_request_stream(token, file_name)
+        with httpx.stream("GET", url, headers=headers, follow_redirects=True) as response:
+            continue_download = self.handle_response_stream(file_name, response)
+            if not continue_download:
+                return
+            with open(file_name, "ab") as file:
+                for chunk in response.iter_bytes(config.CHUNK_SIZE):
+                    file.write(chunk)
+
+    def get_file_length(self, file_path: str) -> int:
+        """Get the total bytes of the file."""
+        if not os.path.exists(file_path):
+            return 0
+        return os.path.getsize(file_path)
+
+    def handle_response_stream(self, file_name: str, response: httpx.Response) -> bool:
+        if response.status_code == 206:
+            print(f"Resuming the download for {file_name}")
+            return True
+
+        # If server returns "Range Not Satisfiable",
+        # then we can conclude that file has been fully downloaded.
+        if response.status_code == 416:
+            print(f"File '{file_name}' is already fully downloaded.")
+            return False
+
+        if response.status_code not in [200, 206]:
+            raise HTTPResponseNotOK(response.status_code, response.text)
+        return True
+
+    def prepare_request_stream(self, token: str, file_name: str) -> tuple[str, dict[str, str]]:
+        current_chunk_length = self.get_file_length(file_name)
+        url = f"{self.server_url}downloadPackage?token={token}"
+        headers = self._setup_headers("binary", current_chunk_length)
+        return url, headers
 
 def main():
     available_content_sets = [

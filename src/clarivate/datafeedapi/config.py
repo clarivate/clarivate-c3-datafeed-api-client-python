@@ -20,3 +20,6 @@ RETRY_WAIT = 5
 
 # Maximimum simultaneous connections
 MAX_CONNECT = 10
+
+# Chunk Size to download 64 KB
+CHUNK_SIZE = 65536
